@@ -1,0 +1,430 @@
+import React, { useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  ScrollView,
+} from 'react-native';
+import { StackNavigationProp } from '@react-navigation/stack';
+import { RouteProp } from '@react-navigation/native';
+import { supabase } from '../config/supabase';
+import { WorkoutWithExercises, Exercise, Set as SetType } from '../types';
+
+type RootStackParamList = {
+  WorkoutDetail: { workoutId: string };
+  Home: undefined;
+};
+
+type WorkoutDetailScreenNavigationProp = StackNavigationProp<
+  RootStackParamList,
+  'WorkoutDetail'
+>;
+
+type WorkoutDetailScreenRouteProp = RouteProp<
+  RootStackParamList,
+  'WorkoutDetail'
+>;
+
+interface Props {
+  navigation: WorkoutDetailScreenNavigationProp;
+  route: WorkoutDetailScreenRouteProp;
+}
+
+const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
+  const { workoutId } = route.params;
+  const [workout, setWorkout] = useState<WorkoutWithExercises | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [updating, setUpdating] = useState(false);
+
+  useEffect(() => {
+    fetchWorkoutDetails();
+  }, [workoutId]);
+
+  const fetchWorkoutDetails = async () => {
+    try {
+      // First get the workout
+      const { data: workoutData, error: workoutError } = await supabase
+        .from('workouts')
+        .select('*')
+        .eq('id', workoutId)
+        .single();
+
+      if (workoutError) throw workoutError;
+
+      // Then get exercises with their sets
+      const { data: workoutExercises, error: weError } = await supabase
+        .from('workout_exercises')
+        .select(`
+          id,
+          order,
+          exercises (
+            id,
+            name,
+            description
+          ),
+          sets (
+            id,
+            weight,
+            reps,
+            completed,
+            created_at
+          )
+        `)
+        .eq('workout_id', workoutId)
+        .order('order');
+
+      if (weError) throw weError;
+
+      // Transform the data
+      const exercises = workoutExercises.map((we: any) => ({
+        workout_exercise_id: we.id,
+        exercise_id: we.exercises.id,
+        name: we.exercises.name,
+        description: we.exercises.description,
+        sets: we.sets.sort((a: SetType, b: SetType) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        ),
+      }));
+
+      setWorkout({
+        ...workoutData,
+        exercises,
+      });
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleSetCompletion = async (setId: string, completed: boolean) => {
+    setUpdating(true);
+    try {
+      const { error } = await supabase
+        .from('sets')
+        .update({ completed: !completed })
+        .eq('id', setId);
+
+      if (error) throw error;
+
+      // Update local state
+      if (workout) {
+        const updatedWorkout = { ...workout };
+        updatedWorkout.exercises = updatedWorkout.exercises.map((exercise) => ({
+          ...exercise,
+          sets: exercise.sets.map((set) =>
+            set.id === setId ? { ...set, completed: !completed } : set
+          ),
+        }));
+        setWorkout(updatedWorkout);
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const completeWorkout = async () => {
+    try {
+      const { error } = await supabase
+        .from('workouts')
+        .update({ completed_at: new Date().toISOString() })
+        .eq('id', workoutId);
+
+      if (error) throw error;
+
+      Alert.alert('Success', 'Workout completed!', [
+        {
+          text: 'OK',
+          onPress: () => navigation.goBack(),
+        },
+      ]);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
+  const getTotalSets = () => {
+    if (!workout) return 0;
+    return workout.exercises.reduce((total, exercise) => total + exercise.sets.length, 0);
+  };
+
+  const getCompletedSets = () => {
+    if (!workout) return 0;
+    return workout.exercises.reduce(
+      (total, exercise) =>
+        total + exercise.sets.filter((set) => set.completed).length,
+      0
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text>Loading workout...</Text>
+      </View>
+    );
+  }
+
+  if (!workout) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text>Workout not found</Text>
+      </View>
+    );
+  }
+
+  const totalSets = getTotalSets();
+  const completedSets = getCompletedSets();
+  const progressPercentage = totalSets > 0 ? (completedSets / totalSets) * 100 : 0;
+
+  return (
+    <View style={styles.container}>
+      <ScrollView style={styles.scrollContainer}>
+        <View style={styles.header}>
+          <Text style={styles.workoutName}>{workout.name}</Text>
+          {workout.description && (
+            <Text style={styles.workoutDescription}>{workout.description}</Text>
+          )}
+          <Text style={styles.workoutDate}>
+            Created: {new Date(workout.created_at).toLocaleDateString()}
+          </Text>
+        </View>
+
+        <View style={styles.progressContainer}>
+          <Text style={styles.progressText}>
+            Progress: {completedSets}/{totalSets} sets completed
+          </Text>
+          <View style={styles.progressBar}>
+            <View
+              style={[
+                styles.progressFill,
+                { width: `${progressPercentage}%` },
+              ]}
+            />
+          </View>
+          <Text style={styles.progressPercentage}>
+            {Math.round(progressPercentage)}% complete
+          </Text>
+        </View>
+
+        {workout.exercises.map((exercise, exerciseIndex) => (
+          <View key={exercise.exercise_id} style={styles.exerciseCard}>
+            <Text style={styles.exerciseName}>{exercise.name}</Text>
+            {exercise.description && (
+              <Text style={styles.exerciseDescription}>{exercise.description}</Text>
+            )}
+
+            {exercise.sets.map((set, setIndex) => (
+              <View key={set.id} style={styles.setRow}>
+                <Text style={styles.setLabel}>Set {setIndex + 1}</Text>
+                <View style={styles.setDetails}>
+                  {set.weight && (
+                    <Text style={styles.setInfo}>{set.weight} lbs</Text>
+                  )}
+                  <Text style={styles.setInfo}>{set.reps} reps</Text>
+                </View>
+                <TouchableOpacity
+                  style={[
+                    styles.completeButton,
+                    set.completed && styles.completedButton,
+                  ]}
+                  onPress={() => toggleSetCompletion(set.id, set.completed)}
+                  disabled={updating}
+                >
+                  <Text
+                    style={[
+                      styles.completeButtonText,
+                      set.completed && styles.completedButtonText,
+                    ]}
+                  >
+                    {set.completed ? '✓' : '○'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        ))}
+      </ScrollView>
+
+      {!workout.completed_at && (
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={[
+              styles.completeWorkoutButton,
+              completedSets === totalSets && styles.completeWorkoutButtonActive,
+            ]}
+            onPress={completeWorkout}
+            disabled={completedSets !== totalSets}
+          >
+            <Text style={styles.completeWorkoutButtonText}>
+              Complete Workout
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scrollContainer: {
+    flex: 1,
+    padding: 20,
+  },
+  header: {
+    marginBottom: 20,
+  },
+  workoutName: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#1e293b',
+    marginBottom: 8,
+  },
+  workoutDescription: {
+    fontSize: 16,
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  workoutDate: {
+    fontSize: 14,
+    color: '#94a3b8',
+  },
+  progressContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  progressText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  progressBar: {
+    height: 8,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 4,
+    marginBottom: 8,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#2563eb',
+    borderRadius: 4,
+  },
+  progressPercentage: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
+  },
+  exerciseCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  exerciseName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 8,
+  },
+  exerciseDescription: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 12,
+  },
+  setRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  setLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#374151',
+    width: 80,
+  },
+  setDetails: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  setInfo: {
+    fontSize: 14,
+    color: '#64748b',
+    marginHorizontal: 8,
+  },
+  completeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#e2e8f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  completedButton: {
+    backgroundColor: '#dcfce7',
+  },
+  completeButtonText: {
+    fontSize: 18,
+    color: '#64748b',
+  },
+  completedButtonText: {
+    color: '#059669',
+  },
+  footer: {
+    padding: 20,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  completeWorkoutButton: {
+    backgroundColor: '#e2e8f0',
+    borderRadius: 8,
+    padding: 16,
+    alignItems: 'center',
+  },
+  completeWorkoutButtonActive: {
+    backgroundColor: '#059669',
+  },
+  completeWorkoutButtonText: {
+    color: '#64748b',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
+
+export default WorkoutDetailScreen;

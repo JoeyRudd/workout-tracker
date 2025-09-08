@@ -26,7 +26,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Development mode - set to true to skip login
+  const DEV_MODE = true;
+
   useEffect(() => {
+    // Development mode - skip authentication
+    if (DEV_MODE) {
+      setUser({
+        id: 'dev-user-123',
+        email: 'dev@example.com',
+        created_at: new Date().toISOString(),
+      });
+      setLoading(false);
+      return;
+    }
+
     // Get initial session
     const initializeAuth = async () => {
       try {

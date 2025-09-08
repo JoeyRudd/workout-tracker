@@ -27,7 +27,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   // Development mode - set to true to skip login
-  const DEV_MODE = true;
+  const DEV_MODE = false;
 
   useEffect(() => {
     // Development mode - skip authentication

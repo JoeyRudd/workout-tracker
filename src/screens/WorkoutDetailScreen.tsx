@@ -127,6 +127,64 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
     }
   };
 
+  const updateSetReps = async (setId: string, newReps: number) => {
+    setUpdating(true);
+    try {
+      const safeReps = Math.max(0, Math.floor(newReps || 0));
+      const { error } = await supabase
+        .from('sets')
+        .update({ reps: safeReps })
+        .eq('id', setId);
+
+      if (error) throw error;
+
+      if (workout) {
+        const updatedWorkout = { ...workout } as WorkoutWithExercises;
+        updatedWorkout.exercises = updatedWorkout.exercises.map((exercise) => ({
+          ...exercise,
+          sets: exercise.sets.map((set) =>
+            set.id === setId ? { ...set, reps: safeReps } : set
+          ),
+        }));
+        setWorkout(updatedWorkout);
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const updateSetWeight = async (setId: string, newWeight?: number) => {
+    setUpdating(true);
+    try {
+      const weightValue = newWeight === undefined || isNaN(newWeight)
+        ? null
+        : Number(newWeight);
+      const { error } = await supabase
+        .from('sets')
+        .update({ weight: weightValue as any })
+        .eq('id', setId);
+
+      if (error) throw error;
+
+      if (workout) {
+        const updatedWorkout = { ...workout } as WorkoutWithExercises;
+        updatedWorkout.exercises = updatedWorkout.exercises.map((exercise) => ({
+          ...exercise,
+          sets: exercise.sets.map((set) =>
+            set.id === setId ? { ...set, weight: (weightValue as unknown as number | undefined) } : set
+          ),
+        }));
+        setWorkout(updatedWorkout);
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    } finally {
+      setUpdating(false);
+    }
+  };
+
   const completeWorkout = async () => {
     try {
       const { error } = await supabase
@@ -222,10 +280,42 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
               <View key={set.id} style={styles.setRow}>
                 <Text style={styles.setLabel}>Set {setIndex + 1}</Text>
                 <View style={styles.setDetails}>
-                  {set.weight && (
-                    <Text style={styles.setInfo}>{set.weight} lbs</Text>
-                  )}
-                  <Text style={styles.setInfo}>{set.reps} reps</Text>
+                  <View style={styles.inlineControlGroup}>
+                    <Text style={styles.setInfoLabel}>Reps</Text>
+                    <TouchableOpacity
+                      style={styles.smallButton}
+                      onPress={() => updateSetReps(set.id, (set.reps || 0) - 1)}
+                      disabled={updating}
+                    >
+                      <Text style={styles.smallButtonText}>-</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.setInfo}>{set.reps}</Text>
+                    <TouchableOpacity
+                      style={styles.smallButton}
+                      onPress={() => updateSetReps(set.id, (set.reps || 0) + 1)}
+                      disabled={updating}
+                    >
+                      <Text style={styles.smallButtonText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.inlineControlGroup}>
+                    <Text style={styles.setInfoLabel}>Weight</Text>
+                    <TouchableOpacity
+                      style={styles.smallButton}
+                      onPress={() => updateSetWeight(set.id, (set.weight || 0) - 5)}
+                      disabled={updating}
+                    >
+                      <Text style={styles.smallButtonText}>-</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.setInfo}>{set.weight ?? 0} lbs</Text>
+                    <TouchableOpacity
+                      style={styles.smallButton}
+                      onPress={() => updateSetWeight(set.id, (set.weight || 0) + 5)}
+                      disabled={updating}
+                    >
+                      <Text style={styles.smallButtonText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
                 <TouchableOpacity
                   style={[

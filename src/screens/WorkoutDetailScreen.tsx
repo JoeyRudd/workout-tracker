@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Alert,
   ScrollView,
+  TextInput,
 } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
@@ -37,6 +38,10 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
   const [workout, setWorkout] = useState<WorkoutWithExercises | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
+  const [inputValues, setInputValues] = useState<Record<string, { weight?: string; reps?: string }>>({});
+
+  type PreviousSet = { weight?: number | null; reps?: number | null };
+  const [previousByExerciseId, setPreviousByExerciseId] = useState<Record<string, PreviousSet[]>>({});
 
   useEffect(() => {
     fetchWorkoutDetails();
@@ -80,7 +85,7 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
       // Transform the data
       const exercises = workoutExercises.map((we: any) => ({
         workout_exercise_id: we.id,
-        exercise_id: we.exercises.id,
+        id: we.exercises.id,
         name: we.exercises.name,
         description: we.exercises.description,
         sets: we.sets.sort((a: SetType, b: SetType) =>
@@ -88,6 +93,55 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
         ),
       }));
 
+      // Fetch previous workout sets per exercise (most recent previous workout before this workout's created_at)
+      const prevMap: Record<string, PreviousSet[]> = {};
+      await Promise.all(
+        exercises.map(async (ex) => {
+          const { data: prevWe, error: prevErr } = await supabase
+            .from('workout_exercises')
+            .select(`
+              id,
+              sets (
+                id,
+                weight,
+                reps,
+                created_at
+              ),
+              workouts!inner (
+                created_at,
+                user_id
+              )
+            `)
+            .eq('exercise_id', ex.id)
+            .lt('workouts.created_at', workoutData.created_at)
+            .eq('workouts.user_id', workoutData.user_id)
+            .order('created_at', { referencedTable: 'workouts', ascending: false })
+            .limit(1);
+
+          if (!prevErr && prevWe && prevWe.length > 0) {
+            const setsSorted = ((prevWe[0] as any).sets as Array<{ created_at: string; weight?: number | null; reps?: number | null }>)
+              .slice()
+              .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+            prevMap[ex.id] = setsSorted.map((s: { weight?: number | null; reps?: number | null }) => ({ weight: s.weight ?? null, reps: s.reps ?? null }));
+          } else {
+            prevMap[ex.id] = [];
+          }
+        })
+      );
+
+      // Initialize input values from current sets
+      const initialInputs: Record<string, { weight?: string; reps?: string }> = {};
+      exercises.forEach((ex) => {
+        ex.sets.forEach((s: SetType) => {
+          initialInputs[s.id] = {
+            weight: s.weight !== undefined && s.weight !== null ? String(s.weight) : '',
+            reps: s.reps !== undefined && s.reps !== null ? String(s.reps) : '',
+          };
+        });
+      });
+
+      setPreviousByExerciseId(prevMap);
+      setInputValues(initialInputs);
       setWorkout({
         ...workoutData,
         exercises,
@@ -148,6 +202,10 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
         }));
         setWorkout(updatedWorkout);
       }
+      setInputValues((prev) => ({
+        ...prev,
+        [setId]: { ...(prev[setId] || {}), reps: String(safeReps) },
+      }));
     } catch (error: any) {
       Alert.alert('Error', error.message);
     } finally {
@@ -178,6 +236,10 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
         }));
         setWorkout(updatedWorkout);
       }
+      setInputValues((prev) => ({
+        ...prev,
+        [setId]: { ...(prev[setId] || {}), weight: weightValue !== null && weightValue !== undefined ? String(weightValue) : '' },
+      }));
     } catch (error: any) {
       Alert.alert('Error', error.message);
     } finally {
@@ -269,75 +331,96 @@ const WorkoutDetailScreen: React.FC<Props> = ({ navigation, route }) => {
           </Text>
         </View>
 
-        {workout.exercises.map((exercise, exerciseIndex) => (
-          <View key={exercise.exercise_id} style={styles.exerciseCard}>
-            <Text style={styles.exerciseName}>{exercise.name}</Text>
-            {exercise.description && (
-              <Text style={styles.exerciseDescription}>{exercise.description}</Text>
-            )}
+        {workout.exercises.map((exercise, exerciseIndex) => {
+          const prevSets = previousByExerciseId[exercise.id] || [];
+          return (
+            <View key={`${exercise.id}-${exerciseIndex}`} style={styles.exerciseCard}>
+              <Text style={styles.exerciseName}>{exercise.name}</Text>
+              {exercise.description && (
+                <Text style={styles.exerciseDescription}>{exercise.description}</Text>
+              )}
 
-            {exercise.sets.map((set, setIndex) => (
-              <View key={set.id} style={styles.setRow}>
-                <Text style={styles.setLabel}>Set {setIndex + 1}</Text>
-                <View style={styles.setDetails}>
-                  <View style={styles.inlineControlGroup}>
-                    <Text style={styles.setInfoLabel}>Reps</Text>
-                    <TouchableOpacity
-                      style={styles.smallButton}
-                      onPress={() => updateSetReps(set.id, (set.reps || 0) - 1)}
-                      disabled={updating}
-                    >
-                      <Text style={styles.smallButtonText}>-</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.setInfo}>{set.reps}</Text>
-                    <TouchableOpacity
-                      style={styles.smallButton}
-                      onPress={() => updateSetReps(set.id, (set.reps || 0) + 1)}
-                      disabled={updating}
-                    >
-                      <Text style={styles.smallButtonText}>+</Text>
-                    </TouchableOpacity>
-                  </View>
-                  <View style={styles.inlineControlGroup}>
-                    <Text style={styles.setInfoLabel}>Weight</Text>
-                    <TouchableOpacity
-                      style={styles.smallButton}
-                      onPress={() => updateSetWeight(set.id, (set.weight || 0) - 5)}
-                      disabled={updating}
-                    >
-                      <Text style={styles.smallButtonText}>-</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.setInfo}>{set.weight ?? 0} lbs</Text>
-                    <TouchableOpacity
-                      style={styles.smallButton}
-                      onPress={() => updateSetWeight(set.id, (set.weight || 0) + 5)}
-                      disabled={updating}
-                    >
-                      <Text style={styles.smallButtonText}>+</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                <TouchableOpacity
-                  style={[
-                    styles.completeButton,
-                    set.completed && styles.completedButton,
-                  ]}
-                  onPress={() => toggleSetCompletion(set.id, set.completed)}
-                  disabled={updating}
-                >
-                  <Text
-                    style={[
-                      styles.completeButtonText,
-                      set.completed && styles.completedButtonText,
-                    ]}
-                  >
-                    {set.completed ? '✓' : '○'}
-                  </Text>
-                </TouchableOpacity>
+              <View style={styles.gridHeaderRow}>
+                <Text style={[styles.gridHeaderCell, styles.gridCellSet]}>Set</Text>
+                <Text style={[styles.gridHeaderCell, styles.gridCellPrevious]}>Previous</Text>
+                <Text style={[styles.gridHeaderCell, styles.gridCellLbs]}>Lbs</Text>
+                <Text style={[styles.gridHeaderCell, styles.gridCellReps]}>Reps</Text>
+                <Text style={[styles.gridHeaderCell, styles.gridCellComplete]}>Complete</Text>
               </View>
-            ))}
-          </View>
-        ))}
+
+              {exercise.sets.map((set, setIndex) => {
+                const prev = prevSets[setIndex];
+                const prevText = prev && prev.weight != null && prev.reps != null
+                  ? `${prev.weight}x${prev.reps}`
+                  : '-';
+                const currentInputs = inputValues[set.id] || {};
+                return (
+                  <View key={`${set.id}-${setIndex}`} style={styles.gridRow}>
+                    <Text style={[styles.gridCell, styles.gridCellSet]}>{setIndex + 1}</Text>
+                    <Text style={[styles.gridCell, styles.gridCellPrevious]}>{prevText}</Text>
+                    <View style={[styles.gridCell, styles.gridCellLbs]}>
+                      <TextInput
+                        style={styles.input}
+                        keyboardType="numeric"
+                        value={currentInputs.weight ?? ''}
+                        onChangeText={(t) =>
+                          setInputValues((prevVals) => ({
+                            ...prevVals,
+                            [set.id]: { ...(prevVals[set.id] || {}), weight: t },
+                          }))
+                        }
+                        onEndEditing={() => {
+                          const num = currentInputs.weight === '' || currentInputs.weight == null ? undefined : Number(currentInputs.weight);
+                          updateSetWeight(set.id, num);
+                        }}
+                        placeholder="0"
+                        editable={!updating}
+                      />
+                    </View>
+                    <View style={[styles.gridCell, styles.gridCellReps]}>
+                      <TextInput
+                        style={styles.input}
+                        keyboardType="numeric"
+                        value={currentInputs.reps ?? ''}
+                        onChangeText={(t) =>
+                          setInputValues((prevVals) => ({
+                            ...prevVals,
+                            [set.id]: { ...(prevVals[set.id] || {}), reps: t },
+                          }))
+                        }
+                        onEndEditing={() => {
+                          const num = currentInputs.reps === '' || currentInputs.reps == null ? 0 : Number(currentInputs.reps);
+                          updateSetReps(set.id, num);
+                        }}
+                        placeholder="0"
+                        editable={!updating}
+                      />
+                    </View>
+                    <View style={[styles.gridCell, styles.gridCellComplete]}>
+                      <TouchableOpacity
+                        style={[
+                          styles.completeButton,
+                          set.completed && styles.completedButton,
+                        ]}
+                        onPress={() => toggleSetCompletion(set.id, set.completed)}
+                        disabled={updating}
+                      >
+                        <Text
+                          style={[
+                            styles.completeButtonText,
+                            set.completed && styles.completedButtonText,
+                          ]}
+                        >
+                          {set.completed ? '✓' : '○'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })}
       </ScrollView>
 
       {!workout.completed_at && (
@@ -452,6 +535,56 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
     marginBottom: 12,
+  },
+  gridHeaderRow: {
+    flexDirection: 'row',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    backgroundColor: '#f8fafc',
+  },
+  gridHeaderCell: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    textTransform: 'uppercase',
+  },
+  gridRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  gridCell: {
+    justifyContent: 'center',
+  },
+  gridCellSet: {
+    width: 50,
+  },
+  gridCellPrevious: {
+    flex: 1,
+  },
+  gridCellLbs: {
+    width: 90,
+    paddingRight: 8,
+  },
+  gridCellReps: {
+    width: 90,
+    paddingRight: 8,
+  },
+  gridCellComplete: {
+    width: 80,
+    alignItems: 'flex-end',
+  },
+  input: {
+    height: 36,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#fff',
+    color: '#0f172a',
   },
   setRow: {
     flexDirection: 'row',
